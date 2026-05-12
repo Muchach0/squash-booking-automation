@@ -1,0 +1,8 @@
+.env
+logs/
+screenshots/
+.venv/
+__pycache__/
+*.pyc
+.vscode/
+* copy *
