@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Squash Booking</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7f2;
+        --panel: #ffffff;
+        --text: #172018;
+        --muted: #657064;
+        --line: #d9ded5;
+        --accent: #247c53;
+        --accent-dark: #165f3c;
+        --danger: #b42318;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Arial, Helvetica, sans-serif;
+      }
+
+      main {
+        width: min(920px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 48px 0;
+      }
+
+      header {
+        margin-bottom: 28px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 32px;
+        line-height: 1.15;
+        letter-spacing: 0;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+        gap: 24px;
+        align-items: start;
+      }
+
+      form,
+      .preview {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 24px;
+      }
+
+      .field {
+        margin-bottom: 18px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 7px;
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      input,
+      select {
+        width: 100%;
+        min-height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px 12px;
+        color: var(--text);
+        font: inherit;
+        background: #fff;
+      }
+
+      input:focus,
+      select:focus {
+        border-color: var(--accent);
+        outline: 3px solid rgba(36, 124, 83, 0.16);
+      }
+
+      .booking-windows {
+        display: grid;
+        gap: 12px;
+      }
+
+      .booking-window {
+        display: grid;
+        grid-template-columns: minmax(140px, 1.4fr) minmax(96px, 1fr) minmax(96px, 1fr) auto;
+        gap: 10px;
+        align-items: end;
+      }
+
+      .booking-window label {
+        margin-bottom: 5px;
+        font-size: 12px;
+      }
+
+      .error {
+        margin: 6px 0 0;
+        color: var(--danger);
+        font-size: 13px;
+      }
+
+      .success {
+        margin: 0 0 18px;
+        border: 1px solid rgba(36, 124, 83, 0.3);
+        border-radius: 6px;
+        padding: 12px 14px;
+        background: rgba(36, 124, 83, 0.08);
+        color: var(--accent-dark);
+        font-weight: 700;
+      }
+
+      .alert {
+        margin: 0 0 18px;
+        border: 1px solid rgba(180, 35, 24, 0.32);
+        border-radius: 6px;
+        padding: 12px 14px;
+        background: rgba(180, 35, 24, 0.08);
+        color: var(--danger);
+        font-weight: 700;
+        line-height: 1.4;
+      }
+
+      .note {
+        margin: 0 0 18px;
+        border: 1px solid rgba(36, 124, 83, 0.24);
+        border-radius: 8px;
+        padding: 16px 18px;
+        background: rgba(36, 124, 83, 0.07);
+        line-height: 1.5;
+      }
+
+      .note h2 {
+        margin-bottom: 8px;
+        color: var(--accent-dark);
+      }
+
+      .note ul {
+        margin: 0;
+        padding-left: 20px;
+      }
+
+      .note li + li {
+        margin-top: 6px;
+      }
+
+      button {
+        min-height: 44px;
+        border: 0;
+        border-radius: 6px;
+        padding: 10px 16px;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: var(--accent-dark);
+      }
+
+      .secondary-button {
+        background: #f0f3ee;
+        color: var(--danger);
+        border: 1px solid var(--line);
+      }
+
+      .secondary-button:hover {
+        background: #e8ede5;
+      }
+
+      .text-button {
+        min-height: 44px;
+        background: transparent;
+        color: var(--accent);
+        border: 1px solid var(--line);
+      }
+
+      .text-button:hover {
+        background: #f0f3ee;
+      }
+
+      .remove-window {
+        width: 44px;
+        padding: 0;
+        background: #fff;
+        color: var(--danger);
+        border: 1px solid var(--line);
+      }
+
+      .remove-window:hover {
+        background: rgba(180, 35, 24, 0.08);
+      }
+
+      .remove-window:disabled {
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        font-size: 18px;
+        letter-spacing: 0;
+      }
+
+      dl {
+        margin: 0;
+      }
+
+      dt {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        margin-top: 14px;
+      }
+
+      dd {
+        margin: 4px 0 0;
+        overflow-wrap: anywhere;
+        font-family: "Courier New", Courier, monospace;
+      }
+
+      .empty {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      @media (max-width: 760px) {
+        main {
+          width: min(100% - 24px, 920px);
+          padding: 28px 0;
+        }
+
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .booking-window {
+          grid-template-columns: 1fr;
+        }
+
+        .remove-window {
+          width: 100%;
+        }
+
+        h1 {
+          font-size: 26px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Squash Booking</h1>
+      </header>
+
+      <section class="note" aria-labelledby="booking-note-title">
+        <ul>
+          <li>Le système de réservation automatique se lance tous les jours à 00h01 et effectue les réservations 8 jours à l'avance (ex: il se lancera lundi à 00h01 et tentera de faire une réservation pour le mardi suivant).</li>
+          <li>Utilisez un mot de passe unique ! Celui-ci est enregistré (dans un secret GCP) uniquement pour permettre au système de réservation automatique de se connecter à votre place ; évitez donc, de réutiliser un mot de passe personnel important.</li>
+          <li>L'ordre de préférence de reśervation des courts est le suivant: [3, 4, 5, 2, 1]</li>
+        </ul>
+      </section>
+
+      {% if success_message %}
+        <p class="success">{{ success_message }}</p>
+      {% endif %}
+
+      {% if errors.form %}
+        <p class="alert">{{ errors.form }}</p>
+      {% endif %}
+
+      <div class="layout">
+        <form method="post" action="/">
+          <input type="hidden" name="action" value="upsert">
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" value="{{ values.email }}" autocomplete="email" required>
+            {% if errors.email %}<p class="error">{{ errors.email }}</p>{% endif %}
+          </div>
+
+          <div class="field">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" value="{{ values.password }}" autocomplete="current-password" required>
+            {% if errors.password %}<p class="error">{{ errors.password }}</p>{% endif %}
+          </div>
+
+          <div class="field">
+            <label>Booking windows</label>
+            <div id="booking-windows" class="booking-windows">
+              {% for window in values.booking_windows %}
+                <div class="booking-window">
+                  <div>
+                    <label for="booking_day_{{ loop.index }}">Day</label>
+                    <select id="booking_day_{{ loop.index }}" name="booking_day" required>
+                      {% for weekday_value, weekday_label in weekdays %}
+                        <option value="{{ weekday_value }}" {% if window.day == weekday_value %}selected{% endif %}>{{ weekday_label }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div>
+                    <label for="booking_start_{{ loop.index }}">From</label>
+                    <input id="booking_start_{{ loop.index }}" name="booking_start" type="time" value="{{ window.start }}" required>
+                  </div>
+                  <div>
+                    <label for="booking_end_{{ loop.index }}">To</label>
+                    <input id="booking_end_{{ loop.index }}" name="booking_end" type="time" value="{{ window.end }}" required>
+                  </div>
+                  <button class="remove-window" type="button" aria-label="Remove booking window">&times;</button>
+                </div>
+              {% endfor %}
+            </div>
+            {% if errors.booking_windows %}<p class="error">{{ errors.booking_windows }}</p>{% endif %}
+          </div>
+
+          <button class="text-button" id="add-booking-window" type="button">Add booking window</button>
+          <button type="submit">Create or update</button>
+        </form>
+
+        <form method="post" action="/">
+          <input type="hidden" name="action" value="delete">
+          <div class="field">
+            <label for="delete_email">Email to delete</label>
+            <input id="delete_email" name="delete_email" type="email" value="{{ delete_values.email }}" autocomplete="email" required>
+            {% if errors.delete_email %}<p class="error">{{ errors.delete_email }}</p>{% endif %}
+          </div>
+
+          <button class="secondary-button" type="submit">Delete</button>
+        </form>
+
+        <section class="preview" aria-live="polite">
+          <h2>Successfull registration:</h2>
+          {% if env_preview %}
+            <dl>
+              <dt>RESAMANIA_EMAIL</dt>
+              <dd>{{ env_preview.RESAMANIA_EMAIL }}</dd>
+              <dt>RESAMANIA_PASSWORD</dt>
+              <dd>{{ "*" * env_preview.RESAMANIA_PASSWORD|length }}</dd>
+              <dt>RESAMANIA_MOMENT</dt>
+              <dd>{{ env_preview.RESAMANIA_MOMENT }}</dd>
+              <dt>BOOKING_WINDOWS</dt>
+              {% for window in env_preview.BOOKING_WINDOWS %}
+                <dd>{{ window.day|title }} {{ window.start }}-{{ window.end }}</dd>
+              {% endfor %}
+            </dl>
+          {% else %}
+            <p class="empty">No values generated yet.</p>
+          {% endif %}
+        </section>
+      </div>
+    </main>
+    <template id="booking-window-template">
+      <div class="booking-window">
+        <div>
+          <label>Day</label>
+          <select name="booking_day" required>
+            {% for weekday_value, weekday_label in weekdays %}
+              <option value="{{ weekday_value }}">{{ weekday_label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>From</label>
+          <input name="booking_start" type="time" value="17:00" required>
+        </div>
+        <div>
+          <label>To</label>
+          <input name="booking_end" type="time" value="19:00" required>
+        </div>
+        <button class="remove-window" type="button" aria-label="Remove booking window">&times;</button>
+      </div>
+    </template>
+    <script>
+      const bookingWindows = document.querySelector("#booking-windows");
+      const bookingWindowTemplate = document.querySelector("#booking-window-template");
+      const addBookingWindow = document.querySelector("#add-booking-window");
+
+      function updateRemoveButtons() {
+        const removeButtons = bookingWindows.querySelectorAll(".remove-window");
+        removeButtons.forEach((button) => {
+          button.disabled = removeButtons.length === 1;
+        });
+      }
+
+      addBookingWindow.addEventListener("click", () => {
+        bookingWindows.append(bookingWindowTemplate.content.cloneNode(true));
+        updateRemoveButtons();
+      });
+
+      bookingWindows.addEventListener("click", (event) => {
+        if (!event.target.classList.contains("remove-window")) {
+          return;
+        }
+
+        event.target.closest(".booking-window").remove();
+        updateRemoveButtons();
+      });
+
+      updateRemoveButtons();
+    </script>
+  </body>
+</html>

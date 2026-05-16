@@ -2,9 +2,7 @@
 """
 Réservation automatique Squash - Resamania / La Ruche aux Sports.
 
-Objectif : réserver 1 place sur 2 créneaux le lundi dans 8 jours :
-- 18h10
-- 17h30
+Objectif : réserver 1 place sur les créneaux disponibles pour les fenêtres configurées dans 8 jours.
 
 Priorité des courts : 3, 4, 5, 2, 1.
 Un court libre est identifié par le libellé "2 places restantes".
@@ -21,11 +19,16 @@ import logging
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlencode
+
+from google.cloud import secretmanager
+import json
+gcp_secret_path = "projects/1036179882263/secrets/squash_secrets" # project id + secret id
+
 
 from dotenv import load_dotenv
 from playwright.sync_api import Browser, BrowserContext, Locator, Page, TimeoutError, sync_playwright
@@ -43,13 +46,20 @@ DEFAULT_CLUB_PATH = "/larucheauxsports/clubs/2508"
 DEFAULT_ACTIVITY_GROUP_PATH = "/larucheauxsports/activity_groups/392"
 DEFAULT_MOMENT = "17:00-19:00"
 ACTIVITY = "Squash"
-SLOTS = ["18:10", "17:30"]
+DEFAULT_SLOTS = ("17:30", "18:10", "18:50")
+SLOT_GRID_START = "08:50"
+SLOT_DURATION_MINUTES = 40
 COURT_PRIORITY = ["3", "4", "5", "2", "1"]
 REQUIRED_REMAINING_PLACES = 2
 TIME_FILTER_BY_SLOT = {
     "18:10": "Soir",
     "17:30": "L'après-midi",
 }
+TIME_FILTERS_BY_HOUR = (
+    (12, "Matin"),
+    (18, "L'après-midi"),
+    (24, "Soir"),
+)
 
 # Libellés probables observables dans des interfaces FR.
 LOGIN_BUTTON_TEXTS = [
@@ -63,6 +73,25 @@ LOGIN_BUTTON_TEXTS = [
 ]
 BOOKING_BUTTON_TEXTS = ["Réserver", "Reservation", "Réservation", "Planning", "Agenda"]
 CONFIRM_BUTTON_TEXTS = ["Confirmer", "Valider", "Réserver", "Payer", "Terminer"]
+LOGOUT_BUTTON_TEXTS = ["Se déconnecter", "Déconnexion", "Déconnecter", "Logout", "Sign out"]
+ACCOUNT_BUTTON_TEXTS = ["Mon compte", "Compte", "Profil", "Menu"]
+WEEKDAY_BY_NAME = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+    "lundi": 0,
+    "mardi": 1,
+    "mercredi": 2,
+    "jeudi": 3,
+    "vendredi": 4,
+    "samedi": 5,
+    "dimanche": 6,
+}
+WEEKDAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
 @dataclass(frozen=True)
@@ -83,6 +112,7 @@ class Settings:
     club_path: str = DEFAULT_CLUB_PATH
     activity_group_path: str = DEFAULT_ACTIVITY_GROUP_PATH
     moment: str = DEFAULT_MOMENT
+    slots: tuple[str, ...] = DEFAULT_SLOTS
     use_direct_planning_url: bool = True
 
 
@@ -111,23 +141,82 @@ def parse_bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on", "oui"}
 
 
-def monday_in_8_days_from_sunday(today: date | None = None) -> date:
+def booking_target_date(today: date | None = None) -> date:
     """
-    Date cible par défaut.
+    Date cible par défaut : 8 jours après le lancement.
 
-    - Si le script tourne dimanche : lundi 8 jours après, donc J+8.
-    - Les autres jours, pour les tests manuels : prochain lundi visible après navigation
-      vers la semaine suivante.
-
-    Pour forcer une date précise : python reserver_squash.py --date YYYY-MM-DD
+    Pour forcer une date cible précise : python reserver_squash.py --date YYYY-MM-DD
     """
-    today = today or date.today()
-    if today.weekday() == 6:  # dimanche
-        return today + timedelta(days=8)
-    days_until_monday = (7 - today.weekday()) % 7
-    if days_until_monday == 0:
-        days_until_monday = 7
-    return today + timedelta(days=days_until_monday)
+    return (today or date.today()) + timedelta(days=8)
+
+
+def parse_clock(value: str) -> int:
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", value.strip())
+    if not match:
+        raise ValueError(f"Heure invalide : {value!r}")
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour > 23 or minute > 59:
+        raise ValueError(f"Heure invalide : {value!r}")
+
+    return hour * 60 + minute
+
+
+def format_clock(total_minutes: int) -> str:
+    hour, minute = divmod(total_minutes, 60)
+    return f"{hour:02d}:{minute:02d}"
+
+
+def slots_for_moment(moment: str) -> tuple[str, ...]:
+    """
+    Calcule les créneaux à rechercher depuis la fenêtre horaire configurée.
+
+    Resamania affiche toujours les créneaux Squash sur une grille fixe :
+    08:50, 09:30, 10:10, 10:50, puis toutes les 40 minutes. On garde les
+    créneaux de cette grille qui tombent dans la fenêtre configurée.
+    """
+    try:
+        start_text, end_text = [part.strip() for part in moment.split("-", 1)]
+        start = parse_clock(start_text)
+        end = parse_clock(end_text)
+        grid_start = parse_clock(SLOT_GRID_START)
+    except ValueError:
+        return DEFAULT_SLOTS
+
+    if start >= end:
+        return DEFAULT_SLOTS
+
+    if start <= grid_start:
+        current = grid_start
+    else:
+        minutes_after_grid_start = start - grid_start
+        skipped_slots = (minutes_after_grid_start + SLOT_DURATION_MINUTES - 1) // SLOT_DURATION_MINUTES
+        current = grid_start + skipped_slots * SLOT_DURATION_MINUTES
+
+    slots: list[str] = []
+    while current < end:
+        slots.append(format_clock(current))
+        current += SLOT_DURATION_MINUTES
+
+    return tuple(slots) or DEFAULT_SLOTS
+
+
+def time_filter_label_for_slot(slot: str) -> str | None:
+    if slot in TIME_FILTER_BY_SLOT:
+        return TIME_FILTER_BY_SLOT[slot]
+
+    try:
+        minutes = parse_clock(slot)
+    except ValueError:
+        return None
+
+    hour = minutes // 60
+    for max_hour, label in TIME_FILTERS_BY_HOUR:
+        if hour < max_hour:
+            return label
+
+    return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -136,16 +225,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--headless", action="store_true", help="Force le mode headless")
     parser.add_argument("--dry-run", action="store_true", help="Teste sans confirmer la réservation")
     parser.add_argument("--debug", action="store_true", help="Logs détaillés + pauses courtes")
-    parser.add_argument("--date", help="Date cible ISO YYYY-MM-DD, pour test manuel")
+    parser.add_argument("--date", help="Date cible ISO YYYY-MM-DD, pour test manuel. Par défaut : aujourd'hui + 8 jours")
     return parser.parse_args()
 
 
 def load_settings(args: argparse.Namespace) -> Settings:
     load_dotenv(BASE_DIR / ".env")
-    email = os.getenv("RESAMANIA_EMAIL", "").strip()
-    password = os.getenv("RESAMANIA_PASSWORD", "").strip()
-    if not email or not password:
-        raise RuntimeError("RESAMANIA_EMAIL et RESAMANIA_PASSWORD doivent être définis dans .env")
 
     env_headless = parse_bool(os.getenv("HEADLESS"), default=True)
     headless = env_headless
@@ -155,12 +240,13 @@ def load_settings(args: argparse.Namespace) -> Settings:
         headless = True
 
     dry_run = args.dry_run or parse_bool(os.getenv("DRY_RUN"), default=False)
-    target = date.fromisoformat(args.date) if args.date else monday_in_8_days_from_sunday()
+    target = date.fromisoformat(args.date) if args.date else booking_target_date()
+    moment = os.getenv("RESAMANIA_MOMENT", DEFAULT_MOMENT).strip() or DEFAULT_MOMENT
 
     return Settings(
         url=os.getenv("RESAMANIA_URL", DEFAULT_URL).strip() or DEFAULT_URL,
-        email=email,
-        password=password,
+        email="",
+        password="",
         headless=headless,
         dry_run=dry_run,
         debug=args.debug,
@@ -173,7 +259,8 @@ def load_settings(args: argparse.Namespace) -> Settings:
         planning_base_url=os.getenv("PLANNING_BASE_URL", PLANNING_BASE_URL).strip() or PLANNING_BASE_URL,
         club_path=os.getenv("RESAMANIA_CLUB_PATH", DEFAULT_CLUB_PATH).strip() or DEFAULT_CLUB_PATH,
         activity_group_path=os.getenv("RESAMANIA_ACTIVITY_GROUP_PATH", DEFAULT_ACTIVITY_GROUP_PATH).strip() or DEFAULT_ACTIVITY_GROUP_PATH,
-        moment=os.getenv("RESAMANIA_MOMENT", DEFAULT_MOMENT).strip() or DEFAULT_MOMENT,
+        moment=moment,
+        slots=slots_for_moment(moment),
         use_direct_planning_url=parse_bool(os.getenv("USE_DIRECT_PLANNING_URL"), default=True),
     )
 
@@ -331,6 +418,34 @@ def login(page: Page, settings: Settings, logger: logging.Logger) -> None:
         path = screenshot(page, "login_failed")
         raise RuntimeError(f"Connexion probablement échouée. Screenshot : {path}")
     logger.info("Connexion effectuée ou session déjà active")
+
+
+def logout(page: Page, logger: logging.Logger) -> None:
+    logger.info("Déconnexion")
+    try:
+        close_modal_if_present(page, logger)
+        if click_first_text(page, LOGOUT_BUTTON_TEXTS, timeout_ms=3000):
+            wait_dom(page)
+            logger.info("Déconnexion effectuée")
+            return
+
+        for text in ACCOUNT_BUTTON_TEXTS:
+            try:
+                account_button = page.get_by_role("button", name=re.compile(re.escape(text), re.I))
+                if account_button.count() > 0 and account_button.first.is_visible(timeout=800):
+                    account_button.first.click(timeout=2000)
+                    page.wait_for_timeout(500)
+                    if click_first_text(page, LOGOUT_BUTTON_TEXTS, timeout_ms=3000):
+                        wait_dom(page)
+                        logger.info("Déconnexion effectuée")
+                        return
+            except Exception:
+                continue
+
+        logger.warning("Bouton de déconnexion introuvable. La session sera fermée avec le navigateur.")
+    except Exception as exc:
+        logger.warning("Déconnexion non confirmée : %s", exc)
+
 
 def open_booking_area(page: Page, logger: logging.Logger) -> None:
     logger.info("Accès à l'espace réservation")
@@ -745,7 +860,7 @@ def is_already_registered_for_slot(page: Page, slot: str, settings: Settings, lo
 def find_best_card_for_slot(page: Page, slot: str, settings: Settings, logger: logging.Logger) -> tuple[Locator | None, str | None]:
     """
     Recherche orientée créneau :
-    1. on scanne d'abord les cartes du créneau demandé, par exemple 18:10 ;
+    1. on scanne d'abord les cartes du créneau demandé, par exemple 14:10 ;
     2. on ne retient une carte que si elle contient explicitement "2 places restantes" ;
     3. on applique ensuite la priorité des courts : 3, 4, 5, 2, 1 ;
     4. si un court est vu mais sans 2 places restantes, on continue la recherche.
@@ -927,11 +1042,10 @@ def click_register_in_card(card: Locator, logger: logging.Logger) -> None:
 def select_time_filter_for_slot(page: Page, slot: str, settings: Settings, logger: logging.Logger) -> None:
     """Sélectionne le filtre horaire Resamania avant de scanner les cartes.
 
-    Parcours demandé :
-    - 18:10 -> combobox #mui-component-select-time -> option "Soir"
-    - 17:30 -> combobox #mui-component-select-time -> option "L'après-midi"
+    Le libellé est déduit de l'heure du créneau, avec quelques exceptions
+    historiques si Resamania expose un découpage spécifique.
     """
-    label = TIME_FILTER_BY_SLOT.get(slot)
+    label = time_filter_label_for_slot(slot)
     if not label:
         logger.debug("Aucun filtre horaire configuré pour le créneau %s", slot)
         return
@@ -1080,15 +1194,20 @@ def run(settings: Settings, logger: logging.Logger) -> int:
                 select_activity(page, ACTIVITY, settings, logger)
                 select_date(page, settings.target_date, settings, logger)
 
+            logger.info(
+                "Créneaux calculés pour la fenêtre %s : %s",
+                settings.moment,
+                ", ".join(settings.slots),
+            )
             results: dict[str, bool] = {}
-            for slot in SLOTS:
+            for slot in settings.slots:
                 if not settings.use_direct_planning_url:
                     select_time_filter_for_slot(page, slot, settings, logger)
                 results[slot] = reserve_slot(page, slot, settings, logger)
 
             # Vérification finale : contrôle des inscriptions sur tous les créneaux.
             logger.info("=== Vérification finale des inscriptions ===")
-            for slot in SLOTS:
+            for slot in settings.slots:
                 court = is_already_registered_for_slot(page, slot, settings, logger)
                 if court:
                     logger.info("Créneau %s : INSCRIT (court %s)", slot, court)
@@ -1099,7 +1218,7 @@ def run(settings: Settings, logger: logging.Logger) -> int:
             if failed:
                 logger.error("Réservations incomplètes. Échecs : %s", ", ".join(failed))
                 return 2
-            logger.info("Toutes les réservations demandées sont traitées : %s", ", ".join(SLOTS))
+            logger.info("Toutes les réservations demandées sont traitées : %s", ", ".join(settings.slots))
             return 0
         except Exception as exc:
             logger.exception("Erreur : %s", exc)
@@ -1110,30 +1229,193 @@ def run(settings: Settings, logger: logging.Logger) -> int:
                 pass
             return 1
         finally:
+            try:
+                logout(page, logger)
+            except Exception:
+                pass
             context.close()
             browser.close()
 
-
-def main() -> int:
-    args = parse_args()
-    logger = setup_logger(args.debug)
+def get_user_settings_secret(logger: logging.Logger) -> list:
     try:
-        settings = load_settings(args)
+        client = secretmanager.SecretManagerServiceClient()
+        response = client.access_secret_version(request={
+            "name": gcp_secret_path + "/versions/latest"
+            })
+        result = json.loads(response.payload.data.decode("UTF-8")).get("users", [])
+        if not isinstance(result, list):
+            logger.error("Le secret ne contient pas une liste 'users' valide.")
+            return []
+        return result
+    except Exception as e:
+        logger.exception("Impossible de charger les utilisateurs depuis Secret Manager : %s", e)
+        return []
+
+
+def settings_for_user(base_settings: Settings, user: dict, logger: logging.Logger) -> Settings | None:
+    if not isinstance(user, dict):
+        logger.error("Utilisateur ignoré : entrée invalide dans le secret.")
+        return None
+
+    email = str(user.get("email") or "").strip()
+    password = str(user.get("password") or "")
+
+    if not email or not password:
+        logger.error("Utilisateur ignoré : email ou mot de passe manquant.")
+        return None
+
+    return replace(
+        base_settings,
+        email=email,
+        password=password,
+    )
+
+
+def user_booking_windows(user: dict, base_settings: Settings, logger: logging.Logger) -> list[dict[str, object]]:
+    windows = user.get("booking_windows")
+    if not isinstance(windows, list) or not windows:
+        logger.info("Aucune fenêtre hebdomadaire trouvée pour %s. Fallback legacy : Monday %s.", user.get("email"), user.get("moment") or base_settings.moment)
+        windows = [
+            {
+                "day": "monday",
+                "moment": user.get("moment") or base_settings.moment,
+            }
+        ]
+
+    normalized_windows: list[dict[str, object]] = []
+    for index, window in enumerate(windows, start=1):
+        if not isinstance(window, dict):
+            logger.error("Fenêtre ignorée pour %s : entrée #%s invalide.", user.get("email"), index)
+            continue
+
+        day = str(window.get("day") or "").strip().lower()
+        weekday = WEEKDAY_BY_NAME.get(day)
+        start = str(window.get("start") or "").strip()
+        end = str(window.get("end") or "").strip()
+        moment = str(window.get("moment") or "").strip()
+
+        if not moment and start and end:
+            moment = f"{start}-{end}"
+
+        if weekday is None or not moment:
+            logger.error(
+                "Fenêtre ignorée pour %s : day=%r, moment=%r invalides.",
+                user.get("email"),
+                day,
+                moment,
+            )
+            continue
+
+        normalized_windows.append({
+            "day": day,
+            "weekday": weekday,
+            "moment": moment,
+        })
+
+    return normalized_windows
+
+
+def run_for_users(users: list, base_settings: Settings, logger: logging.Logger) -> int:
+    if not users:
+        logger.error("Aucun utilisateur à traiter.")
+        return 1
+
+    exit_code = 0
+    attempted_bookings = 0
+    for index, user in enumerate(users, start=1):
+        user_settings = settings_for_user(base_settings, user, logger)
+        if user_settings is None:
+            exit_code = 1
+            continue
+
+        logger.info(
+            "=== Utilisateur %s/%s : %s ===",
+            index,
+            len(users),
+            user_settings.email,
+        )
+
+        windows = user_booking_windows(user, base_settings, logger)
+        if not windows:
+            exit_code = 1
+            logger.error("Aucune fenêtre de réservation valide pour %s.", user_settings.email)
+            continue
+
+        for window_index, window in enumerate(windows, start=1):
+            weekday = int(window["weekday"])
+            moment = str(window["moment"])
+            day_label = WEEKDAY_LABELS[weekday]
+
+            if weekday != base_settings.target_date.weekday():
+                logger.info(
+                    "Fenêtre %s/%s ignorée pour %s : %s %s ne correspond pas à la date cible %s (%s).",
+                    window_index,
+                    len(windows),
+                    user_settings.email,
+                    day_label,
+                    moment,
+                    base_settings.target_date.isoformat(),
+                    WEEKDAY_LABELS[base_settings.target_date.weekday()],
+                )
+                continue
+
+            attempted_bookings += 1
+            run_settings = replace(
+                user_settings,
+                target_date=base_settings.target_date,
+                moment=moment,
+                slots=slots_for_moment(moment),
+            )
+            logger.info(
+                "Fenêtre %s/%s à traiter pour %s : %s %s, date cible=%s, créneaux=%s.",
+                window_index,
+                len(windows),
+                user_settings.email,
+                day_label,
+                moment,
+                run_settings.target_date.isoformat(),
+                ", ".join(run_settings.slots),
+            )
+            result = run(run_settings, logger)
+            if result != 0:
+                exit_code = result
+                logger.error("Traitement en échec pour %s avec le code %s", user_settings.email, result)
+
+    if attempted_bookings == 0:
+        logger.info("Aucune réservation à lancer aujourd'hui : aucune fenêtre ne correspond à %s.", WEEKDAY_LABELS[base_settings.target_date.weekday()])
+
+    return exit_code
+
+
+def main(users: list, args: argparse.Namespace | None = None, logger: logging.Logger | None = None) -> int:
+    args = args or parse_args()
+    logger = logger or setup_logger(args.debug)
+    try:
+        base_settings = load_settings(args)
     except Exception as exc:
         logger.error(str(exc))
         return 1
 
     logger.info(
-        "Paramètres : target_date=%s, moment=%s, direct_planning=%s, headless=%s, dry_run=%s, debug=%s",
-        settings.target_date.isoformat(),
-        settings.moment,
-        settings.use_direct_planning_url,
-        settings.headless,
-        settings.dry_run,
-        settings.debug,
+        "Paramètres : today=%s, target_date=%s, target_weekday=%s, direct_planning=%s, headless=%s, dry_run=%s, debug=%s",
+        date.today().isoformat(),
+        base_settings.target_date.isoformat(),
+        WEEKDAY_LABELS[base_settings.target_date.weekday()],
+        base_settings.use_direct_planning_url,
+        base_settings.headless,
+        base_settings.dry_run,
+        base_settings.debug,
     )
-    return run(settings, logger)
+
+    return run_for_users(users, base_settings, logger)
+
+
+def cli() -> int:
+    args = parse_args()
+    logger = setup_logger(args.debug)
+    users = get_user_settings_secret(logger)
+    return main(users, args=args, logger=logger)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(cli())
