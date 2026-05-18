@@ -16,7 +16,7 @@ GCP_SCHEDULER_REGION ?= europe-west1
 
 # Automation ARGS
 DOCKER_IMAGE_AUTOMATION = muchachoo/squash-auto-booking
-DOCKER_IMAGE_VERSION = v2
+DOCKER_IMAGE_VERSION = v3
 AUTOMATION_ARGS ?=
 AUTOMATION_TEST_ARGS ?= --headless --debug
 GCP_CLOUD_RUN_JOB_AUTOMATION ?= squash-auto-automation
