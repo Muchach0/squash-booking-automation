@@ -2,6 +2,15 @@ FROM mcr.microsoft.com/playwright/python:v1.50.0-noble
 # python version 3.12.3
 # Ubuntu 24.04.1 LTS (Noble Numbat)
 
+ENV TZ=Europe/Paris
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY requirements.txt .
