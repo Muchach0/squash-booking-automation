@@ -861,9 +861,10 @@ def find_best_card_for_slot(page: Page, slot: str, settings: Settings, logger: l
     """
     Recherche orientée créneau :
     1. on scanne d'abord les cartes du créneau demandé, par exemple 14:10 ;
-    2. on ne retient une carte que si elle contient explicitement "2 places restantes" ;
-    3. on applique ensuite la priorité des courts : 3, 4, 5, 2, 1 ;
-    4. si un court est vu mais sans 2 places restantes, on continue la recherche.
+    2. on ne retient que les cartes du jour cible ;
+    3. on ne retient une carte que si elle contient explicitement "2 places restantes" ;
+    4. on applique ensuite la priorité des courts : 3, 4, 5, 2, 1 ;
+    5. si un court est vu mais sans 2 places restantes, on continue la recherche.
     """
     time_re = slot_regex(slot)
     expected = settings.expected_cards_per_slot
@@ -879,6 +880,7 @@ def find_best_card_for_slot(page: Page, slot: str, settings: Settings, logger: l
     found_by_court: dict[str, Locator] = {}
     seen_courts: set[str] = set()
     seen_available_courts: set[str] = set()
+    target_ddmm = settings.target_date.strftime("%d/%m")
     best_seen_count = 0
     stagnant_steps = 0
 
@@ -906,6 +908,12 @@ def find_best_card_for_slot(page: Page, slot: str, settings: Settings, logger: l
                     if not text:
                         continue
                     if "squash" not in text.lower() or not time_re.search(text):
+                        continue
+                    if not card_has_target_day(text, settings.target_date):
+                        logger.debug(
+                            "Carte ignorée %s : date hors cible %s (%s). Texte=%s",
+                            slot, settings.target_date.isoformat(), french_date_label(settings.target_date), text[:320],
+                        )
                         continue
 
                     court_match = re.search(r"\b([1-5])\s+court\s+squash\b", text, re.I)
@@ -944,6 +952,7 @@ def find_best_card_for_slot(page: Page, slot: str, settings: Settings, logger: l
                     strict_locator = page.locator(
                         f'div.MuiPaper-root:has-text("{ACTIVITY}")'
                         f':has-text("{slot}")'
+                        f':has-text("{target_ddmm}")'
                         f':has-text("{court} Court Squash")'
                         f':has-text("{REQUIRED_REMAINING_PLACES} places restantes")'
                     )
