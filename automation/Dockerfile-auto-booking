@@ -20,4 +20,4 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY reserver_squash.py .
 COPY test.py .
 
-CMD ["python", "/app/reserver_squash.py"]
+CMD ["python", "/app/reserver_squash.py", "--debug"]
