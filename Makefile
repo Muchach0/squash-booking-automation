@@ -15,8 +15,8 @@ GCP_SCHEDULER_REGION ?= europe-west1
 
 
 # Automation ARGS
-DOCKER_IMAGE_AUTOMATION = muchachoo/squash-auto-booking:latest
-AUTOMATION_IMAGE ?= squash-auto-booking:latest
+DOCKER_IMAGE_AUTOMATION = muchachoo/squash-auto-booking
+DOCKER_IMAGE_VERSION = v2
 AUTOMATION_ARGS ?=
 AUTOMATION_TEST_ARGS ?= --headless --debug
 GCP_CLOUD_RUN_JOB_AUTOMATION ?= squash-auto-automation
@@ -63,17 +63,17 @@ gcp-init-dns: ## Initialize DNS for GCP
 
 ##### AUTOMATION PART #####
 build-automation:
-	docker build -f automation/Dockerfile-auto-booking -t $(DOCKER_IMAGE_AUTOMATION) automation
+	docker build -f automation/Dockerfile-auto-booking -t $(DOCKER_IMAGE_AUTOMATION):$(DOCKER_IMAGE_VERSION) automation
 
 run-automation: build-automation
-	docker run --rm $(DOCKER_IMAGE_AUTOMATION) python /app/reserver_squash.py $(AUTOMATION_ARGS)
+	docker run --rm $(DOCKER_IMAGE_AUTOMATION):$(DOCKER_IMAGE_VERSION) python /app/reserver_squash.py $(AUTOMATION_ARGS)
 
 run-automation-test:
-	docker run --volume ./automation:/app --rm $(DOCKER_IMAGE_AUTOMATION) python /app/test.py $(AUTOMATION_TEST_ARGS)
+	docker run --volume ./automation:/app --rm $(DOCKER_IMAGE_AUTOMATION):$(DOCKER_IMAGE_VERSION) python /app/test.py $(AUTOMATION_TEST_ARGS)
 
 push-new-docker-image-automation:
-	docker build -f automation/Dockerfile-auto-booking -t $(DOCKER_IMAGE_AUTOMATION) automation
-	docker push $(DOCKER_IMAGE_AUTOMATION)
+	docker build -f automation/Dockerfile-auto-booking -t $(DOCKER_IMAGE_AUTOMATION):$(DOCKER_IMAGE_VERSION) automation
+	docker push $(DOCKER_IMAGE_AUTOMATION):$(DOCKER_IMAGE_VERSION)
 
 gcp-automation-enable-apis:
 	gcloud services enable run.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
@@ -81,7 +81,7 @@ gcp-automation-enable-apis:
 gcp-automation-deploy: push-new-docker-image-automation
 	@echo "Deploying Cloud Run job: $(GCP_CLOUD_RUN_JOB_AUTOMATION)"
 	gcloud run jobs deploy $(GCP_CLOUD_RUN_JOB_AUTOMATION) \
-          --image $(DOCKER_IMAGE_AUTOMATION) \
+          --image $(DOCKER_IMAGE_AUTOMATION):$(DOCKER_IMAGE_VERSION) \
           --region $(GCP_REGION) \
           --tasks 1 \
           --parallelism 1 \
